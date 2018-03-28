@@ -1,0 +1,1154 @@
+// +build !noasm,go1.10
+// hwaccel_amd64.s - AMD64 optimized routines
+//
+// To the extent possible under law, Yawning Angel has waived all copyright
+// and related or neighboring rights to the software, using the Creative
+// Commons "CC0" public domain dedication. See LICENSE or
+// <http://creativecommons.org/publicdomain/zero/1.0/> for full details.
+
+#include "textflag.h"
+
+// func cpuidAmd64(cpuidParams *uint32)
+TEXT ·cpuidAmd64(SB), NOSPLIT, $0-8
+	MOVQ cpuidParams+0(FP), R15
+	MOVL 0(R15), AX
+	MOVL 8(R15), CX
+	CPUID
+	MOVL AX, 0(R15)
+	MOVL BX, 4(R15)
+	MOVL CX, 8(R15)
+	MOVL DX, 12(R15)
+	RET
+
+// func xgetbv0Amd64(xcrVec *uint32)
+TEXT ·xgetbv0Amd64(SB), NOSPLIT, $0-8
+	MOVQ xcrVec+0(FP), BX
+	XORL CX, CX
+	XGETBV
+	MOVL AX, 0(BX)
+	MOVL DX, 4(BX)
+	RET
+
+DATA ·chacha_constants<>+0x00(SB)/4, $0x61707865
+DATA ·chacha_constants<>+0x04(SB)/4, $0x3320646E
+DATA ·chacha_constants<>+0x08(SB)/4, $0x79622D32
+DATA ·chacha_constants<>+0x0c(SB)/4, $0x6B206574
+DATA ·chacha_constants<>+0x10(SB)/8, $0x0504070601000302
+DATA ·chacha_constants<>+0x18(SB)/8, $0x0D0C0F0E09080B0A
+DATA ·chacha_constants<>+0x20(SB)/8, $0x0605040702010003
+DATA ·chacha_constants<>+0x28(SB)/8, $0x0E0D0C0F0A09080B
+GLOBL ·chacha_constants<>(SB), (NOPTR+RODATA), $48
+
+// func chachaXORKeyStreamAVX2(s *chachaState, in, out []byte)
+TEXT ·chachaXORKeyStreamAVX2(SB), NOSPLIT, $544-56
+	// This is Andrew Moon's AVX2 ChaCha implementation taken from
+	// supercop-20171218, with some minor changes, primarily calling
+	// convention and assembly dialect related.
+
+	// Align the stack on a 32 byte boundary.
+	MOVQ SP, BP
+	ADDQ $32, BP
+	ANDQ $-32, BP
+
+	// Go calling convention -> SYSV AMD64 (and a fixup).
+	MOVQ s+0(FP), DI    // &s -> DI
+	ADDQ $16, DI        // Skip the ChaCha constants in the chachaState.
+	MOVQ in+8(FP), SI   // &in[0] -> SI
+	MOVQ out+32(FP), DX // &out[0] -> DX
+	MOVQ in+16(FP), CX  // len(in) -> CX
+
+	// Begin the main body of `chacha_blocks_avx2`.
+	//
+	// Mostly a direct translation except:
+	//  * The number of rounds is always 20.
+	//  * %rbp is used instead of %rsp.
+	LEAQ    ·chacha_constants<>(SB), AX
+	VMOVDQA 0(AX), X8
+	VMOVDQA 16(AX), X6
+	VMOVDQA 32(AX), X7
+	VMOVDQA 0(DI), X9
+	VMOVDQA 16(DI), X10
+	VMOVDQA 32(DI), X11
+
+	// MOVQ 48(DI), AX
+	MOVQ    $1, R9
+	VMOVDQA X8, 0(BP)
+	VMOVDQA X9, 16(BP)
+	VMOVDQA X10, 32(BP)
+	VMOVDQA X11, 48(BP)
+
+	// MOVQ AX, 64(BP)
+	VMOVDQA X6, 448(BP)
+	VMOVDQA X6, 464(BP)
+	VMOVDQA X7, 480(BP)
+	VMOVDQA X7, 496(BP)
+	CMPQ    CX, $512
+	JAE     chacha_blocks_avx2_atleast512
+	CMPQ    CX, $256
+	JAE     chacha_blocks_avx2_atleast256
+	JMP     chacha_blocks_avx2_below256
+
+chacha_blocks_avx2_atleast512:
+	MOVQ 48(BP), AX
+	LEAQ 1(AX), R8
+	LEAQ 2(AX), R9
+	LEAQ 3(AX), R10
+	LEAQ 4(AX), BX
+	LEAQ 5(AX), R11
+	LEAQ 6(AX), R12
+	LEAQ 7(AX), R13
+	LEAQ 8(AX), R14
+	MOVL AX, 128(BP)
+	MOVL R8, 4+128(BP)
+	MOVL R9, 8+128(BP)
+	MOVL R10, 12+128(BP)
+	MOVL BX, 16+128(BP)
+	MOVL R11, 20+128(BP)
+	MOVL R12, 24+128(BP)
+	MOVL R13, 28+128(BP)
+	SHRQ $32, AX
+	SHRQ $32, R8
+	SHRQ $32, R9
+	SHRQ $32, R10
+	SHRQ $32, BX
+	SHRQ $32, R11
+	SHRQ $32, R12
+	SHRQ $32, R13
+	MOVL AX, 160(BP)
+	MOVL R8, 4+160(BP)
+	MOVL R9, 8+160(BP)
+	MOVL R10, 12+160(BP)
+	MOVL BX, 16+160(BP)
+	MOVL R11, 20+160(BP)
+	MOVL R12, 24+160(BP)
+	MOVL R13, 28+160(BP)
+	MOVQ R14, 48(BP)
+
+	// MOVQ 64(BP), AX
+	MOVQ         $20, AX
+	VPBROADCASTD 0(BP), Y0
+	VPBROADCASTD 4+0(BP), Y1
+	VPBROADCASTD 8+0(BP), Y2
+	VPBROADCASTD 12+0(BP), Y3
+	VPBROADCASTD 16(BP), Y4
+	VPBROADCASTD 4+16(BP), Y5
+	VPBROADCASTD 8+16(BP), Y6
+	VPBROADCASTD 12+16(BP), Y7
+	VPBROADCASTD 32(BP), Y8
+	VPBROADCASTD 4+32(BP), Y9
+	VPBROADCASTD 8+32(BP), Y10
+	VPBROADCASTD 12+32(BP), Y11
+	VPBROADCASTD 8+48(BP), Y14
+	VPBROADCASTD 12+48(BP), Y15
+	VMOVDQA      128(BP), Y12
+	VMOVDQA      160(BP), Y13
+
+chacha_blocks_avx2_mainloop1:
+	VPADDD       Y0, Y4, Y0
+	VPADDD       Y1, Y5, Y1
+	VPXOR        Y12, Y0, Y12
+	VPXOR        Y13, Y1, Y13
+	VPADDD       Y2, Y6, Y2
+	VPADDD       Y3, Y7, Y3
+	VPXOR        Y14, Y2, Y14
+	VPXOR        Y15, Y3, Y15
+	VPSHUFB      448(BP), Y12, Y12
+	VPSHUFB      448(BP), Y13, Y13
+	VPADDD       Y8, Y12, Y8
+	VPADDD       Y9, Y13, Y9
+	VPSHUFB      448(BP), Y14, Y14
+	VPSHUFB      448(BP), Y15, Y15
+	VPADDD       Y10, Y14, Y10
+	VPADDD       Y11, Y15, Y11
+	VMOVDQA      Y12, 96(BP)
+	VPXOR        Y4, Y8, Y4
+	VPXOR        Y5, Y9, Y5
+	VPSLLD       $ 12, Y4, Y12
+	VPSRLD       $20, Y4, Y4
+	VPXOR        Y4, Y12, Y4
+	VPSLLD       $ 12, Y5, Y12
+	VPSRLD       $20, Y5, Y5
+	VPXOR        Y5, Y12, Y5
+	VPXOR        Y6, Y10, Y6
+	VPXOR        Y7, Y11, Y7
+	VPSLLD       $ 12, Y6, Y12
+	VPSRLD       $20, Y6, Y6
+	VPXOR        Y6, Y12, Y6
+	VPSLLD       $ 12, Y7, Y12
+	VPSRLD       $20, Y7, Y7
+	VPXOR        Y7, Y12, Y7
+	VPADDD       Y0, Y4, Y0
+	VPADDD       Y1, Y5, Y1
+	VPXOR        96(BP), Y0, Y12
+	VPXOR        Y13, Y1, Y13
+	VPADDD       Y2, Y6, Y2
+	VPADDD       Y3, Y7, Y3
+	VPXOR        Y14, Y2, Y14
+	VPXOR        Y15, Y3, Y15
+	VPSHUFB      480(BP), Y12, Y12
+	VPSHUFB      480(BP), Y13, Y13
+	VPADDD       Y8, Y12, Y8
+	VPADDD       Y9, Y13, Y9
+	VPSHUFB      480(BP), Y14, Y14
+	VPSHUFB      480(BP), Y15, Y15
+	VPADDD       Y10, Y14, Y10
+	VPADDD       Y11, Y15, Y11
+	VMOVDQA      Y12, 96(BP)
+	VPXOR        Y4, Y8, Y4
+	VPXOR        Y5, Y9, Y5
+	VPSLLD       $ 7, Y4, Y12
+	VPSRLD       $25, Y4, Y4
+	VPXOR        Y4, Y12, Y4
+	VPSLLD       $ 7, Y5, Y12
+	VPSRLD       $25, Y5, Y5
+	VPXOR        Y5, Y12, Y5
+	VPXOR        Y6, Y10, Y6
+	VPXOR        Y7, Y11, Y7
+	VPSLLD       $ 7, Y6, Y12
+	VPSRLD       $25, Y6, Y6
+	VPXOR        Y6, Y12, Y6
+	VPSLLD       $ 7, Y7, Y12
+	VPSRLD       $25, Y7, Y7
+	VPXOR        Y7, Y12, Y7
+	VPADDD       Y0, Y5, Y0
+	VPADDD       Y1, Y6, Y1
+	VPXOR        Y15, Y0, Y15
+	VPXOR        96(BP), Y1, Y12
+	VPADDD       Y2, Y7, Y2
+	VPADDD       Y3, Y4, Y3
+	VPXOR        Y13, Y2, Y13
+	VPXOR        Y14, Y3, Y14
+	VPSHUFB      448(BP), Y15, Y15
+	VPSHUFB      448(BP), Y12, Y12
+	VPADDD       Y10, Y15, Y10
+	VPADDD       Y11, Y12, Y11
+	VPSHUFB      448(BP), Y13, Y13
+	VPSHUFB      448(BP), Y14, Y14
+	VPADDD       Y8, Y13, Y8
+	VPADDD       Y9, Y14, Y9
+	VMOVDQA      Y15, 96(BP)
+	VPXOR        Y5, Y10, Y5
+	VPXOR        Y6, Y11, Y6
+	VPSLLD       $ 12, Y5, Y15
+	VPSRLD       $20, Y5, Y5
+	VPXOR        Y5, Y15, Y5
+	VPSLLD       $ 12, Y6, Y15
+	VPSRLD       $20, Y6, Y6
+	VPXOR        Y6, Y15, Y6
+	VPXOR        Y7, Y8, Y7
+	VPXOR        Y4, Y9, Y4
+	VPSLLD       $ 12, Y7, Y15
+	VPSRLD       $20, Y7, Y7
+	VPXOR        Y7, Y15, Y7
+	VPSLLD       $ 12, Y4, Y15
+	VPSRLD       $20, Y4, Y4
+	VPXOR        Y4, Y15, Y4
+	VPADDD       Y0, Y5, Y0
+	VPADDD       Y1, Y6, Y1
+	VPXOR        96(BP), Y0, Y15
+	VPXOR        Y12, Y1, Y12
+	VPADDD       Y2, Y7, Y2
+	VPADDD       Y3, Y4, Y3
+	VPXOR        Y13, Y2, Y13
+	VPXOR        Y14, Y3, Y14
+	VPSHUFB      480(BP), Y15, Y15
+	VPSHUFB      480(BP), Y12, Y12
+	VPADDD       Y10, Y15, Y10
+	VPADDD       Y11, Y12, Y11
+	VPSHUFB      480(BP), Y13, Y13
+	VPSHUFB      480(BP), Y14, Y14
+	VPADDD       Y8, Y13, Y8
+	VPADDD       Y9, Y14, Y9
+	VMOVDQA      Y15, 96(BP)
+	VPXOR        Y5, Y10, Y5
+	VPXOR        Y6, Y11, Y6
+	VPSLLD       $ 7, Y5, Y15
+	VPSRLD       $25, Y5, Y5
+	VPXOR        Y5, Y15, Y5
+	VPSLLD       $ 7, Y6, Y15
+	VPSRLD       $25, Y6, Y6
+	VPXOR        Y6, Y15, Y6
+	VPXOR        Y7, Y8, Y7
+	VPXOR        Y4, Y9, Y4
+	VPSLLD       $ 7, Y7, Y15
+	VPSRLD       $25, Y7, Y7
+	VPXOR        Y7, Y15, Y7
+	VPSLLD       $ 7, Y4, Y15
+	VPSRLD       $25, Y4, Y4
+	VPXOR        Y4, Y15, Y4
+	VMOVDQA      96(BP), Y15
+	SUBQ         $2, AX
+	JNZ          chacha_blocks_avx2_mainloop1
+	VMOVDQA      Y8, 192(BP)
+	VMOVDQA      Y9, 224(BP)
+	VMOVDQA      Y10, 256(BP)
+	VMOVDQA      Y11, 288(BP)
+	VMOVDQA      Y12, 320(BP)
+	VMOVDQA      Y13, 352(BP)
+	VMOVDQA      Y14, 384(BP)
+	VMOVDQA      Y15, 416(BP)
+	VPBROADCASTD 0(BP), Y8
+	VPBROADCASTD 4+0(BP), Y9
+	VPBROADCASTD 8+0(BP), Y10
+	VPBROADCASTD 12+0(BP), Y11
+	VPBROADCASTD 16(BP), Y12
+	VPBROADCASTD 4+16(BP), Y13
+	VPBROADCASTD 8+16(BP), Y14
+	VPBROADCASTD 12+16(BP), Y15
+	VPADDD       Y8, Y0, Y0
+	VPADDD       Y9, Y1, Y1
+	VPADDD       Y10, Y2, Y2
+	VPADDD       Y11, Y3, Y3
+	VPADDD       Y12, Y4, Y4
+	VPADDD       Y13, Y5, Y5
+	VPADDD       Y14, Y6, Y6
+	VPADDD       Y15, Y7, Y7
+	VPUNPCKLDQ   Y1, Y0, Y8
+	VPUNPCKLDQ   Y3, Y2, Y9
+	VPUNPCKHDQ   Y1, Y0, Y12
+	VPUNPCKHDQ   Y3, Y2, Y13
+	VPUNPCKLDQ   Y5, Y4, Y10
+	VPUNPCKLDQ   Y7, Y6, Y11
+	VPUNPCKHDQ   Y5, Y4, Y14
+	VPUNPCKHDQ   Y7, Y6, Y15
+	VPUNPCKLQDQ  Y9, Y8, Y0
+	VPUNPCKLQDQ  Y11, Y10, Y1
+	VPUNPCKHQDQ  Y9, Y8, Y2
+	VPUNPCKHQDQ  Y11, Y10, Y3
+	VPUNPCKLQDQ  Y13, Y12, Y4
+	VPUNPCKLQDQ  Y15, Y14, Y5
+	VPUNPCKHQDQ  Y13, Y12, Y6
+	VPUNPCKHQDQ  Y15, Y14, Y7
+	VPERM2I128   $0x20, Y1, Y0, Y8
+	VPERM2I128   $0x20, Y3, Y2, Y9
+	VPERM2I128   $0x31, Y1, Y0, Y12
+	VPERM2I128   $0x31, Y3, Y2, Y13
+	VPERM2I128   $0x20, Y5, Y4, Y10
+	VPERM2I128   $0x20, Y7, Y6, Y11
+	VPERM2I128   $0x31, Y5, Y4, Y14
+	VPERM2I128   $0x31, Y7, Y6, Y15
+	ANDQ         SI, SI
+	JZ           chacha_blocks_avx2_noinput1
+	VPXOR        0(SI), Y8, Y8
+	VPXOR        64(SI), Y9, Y9
+	VPXOR        128(SI), Y10, Y10
+	VPXOR        192(SI), Y11, Y11
+	VPXOR        256(SI), Y12, Y12
+	VPXOR        320(SI), Y13, Y13
+	VPXOR        384(SI), Y14, Y14
+	VPXOR        448(SI), Y15, Y15
+	VMOVDQU      Y8, 0(DX)
+	VMOVDQU      Y9, 64(DX)
+	VMOVDQU      Y10, 128(DX)
+	VMOVDQU      Y11, 192(DX)
+	VMOVDQU      Y12, 256(DX)
+	VMOVDQU      Y13, 320(DX)
+	VMOVDQU      Y14, 384(DX)
+	VMOVDQU      Y15, 448(DX)
+	VMOVDQA      192(BP), Y0
+	VMOVDQA      224(BP), Y1
+	VMOVDQA      256(BP), Y2
+	VMOVDQA      288(BP), Y3
+	VMOVDQA      320(BP), Y4
+	VMOVDQA      352(BP), Y5
+	VMOVDQA      384(BP), Y6
+	VMOVDQA      416(BP), Y7
+	VPBROADCASTD 32(BP), Y8
+	VPBROADCASTD 4+32(BP), Y9
+	VPBROADCASTD 8+32(BP), Y10
+	VPBROADCASTD 12+32(BP), Y11
+	VMOVDQA      128(BP), Y12
+	VMOVDQA      160(BP), Y13
+	VPBROADCASTD 8+48(BP), Y14
+	VPBROADCASTD 12+48(BP), Y15
+	VPADDD       Y8, Y0, Y0
+	VPADDD       Y9, Y1, Y1
+	VPADDD       Y10, Y2, Y2
+	VPADDD       Y11, Y3, Y3
+	VPADDD       Y12, Y4, Y4
+	VPADDD       Y13, Y5, Y5
+	VPADDD       Y14, Y6, Y6
+	VPADDD       Y15, Y7, Y7
+	VPUNPCKLDQ   Y1, Y0, Y8
+	VPUNPCKLDQ   Y3, Y2, Y9
+	VPUNPCKHDQ   Y1, Y0, Y12
+	VPUNPCKHDQ   Y3, Y2, Y13
+	VPUNPCKLDQ   Y5, Y4, Y10
+	VPUNPCKLDQ   Y7, Y6, Y11
+	VPUNPCKHDQ   Y5, Y4, Y14
+	VPUNPCKHDQ   Y7, Y6, Y15
+	VPUNPCKLQDQ  Y9, Y8, Y0
+	VPUNPCKLQDQ  Y11, Y10, Y1
+	VPUNPCKHQDQ  Y9, Y8, Y2
+	VPUNPCKHQDQ  Y11, Y10, Y3
+	VPUNPCKLQDQ  Y13, Y12, Y4
+	VPUNPCKLQDQ  Y15, Y14, Y5
+	VPUNPCKHQDQ  Y13, Y12, Y6
+	VPUNPCKHQDQ  Y15, Y14, Y7
+	VPERM2I128   $0x20, Y1, Y0, Y8
+	VPERM2I128   $0x20, Y3, Y2, Y9
+	VPERM2I128   $0x31, Y1, Y0, Y12
+	VPERM2I128   $0x31, Y3, Y2, Y13
+	VPERM2I128   $0x20, Y5, Y4, Y10
+	VPERM2I128   $0x20, Y7, Y6, Y11
+	VPERM2I128   $0x31, Y5, Y4, Y14
+	VPERM2I128   $0x31, Y7, Y6, Y15
+	VPXOR        32(SI), Y8, Y8
+	VPXOR        96(SI), Y9, Y9
+	VPXOR        160(SI), Y10, Y10
+	VPXOR        224(SI), Y11, Y11
+	VPXOR        288(SI), Y12, Y12
+	VPXOR        352(SI), Y13, Y13
+	VPXOR        416(SI), Y14, Y14
+	VPXOR        480(SI), Y15, Y15
+	VMOVDQU      Y8, 32(DX)
+	VMOVDQU      Y9, 96(DX)
+	VMOVDQU      Y10, 160(DX)
+	VMOVDQU      Y11, 224(DX)
+	VMOVDQU      Y12, 288(DX)
+	VMOVDQU      Y13, 352(DX)
+	VMOVDQU      Y14, 416(DX)
+	VMOVDQU      Y15, 480(DX)
+	ADDQ         $512, SI
+	JMP          chacha_blocks_avx2_mainloop1_cont
+
+chacha_blocks_avx2_noinput1:
+	VMOVDQU      Y8, 0(DX)
+	VMOVDQU      Y9, 64(DX)
+	VMOVDQU      Y10, 128(DX)
+	VMOVDQU      Y11, 192(DX)
+	VMOVDQU      Y12, 256(DX)
+	VMOVDQU      Y13, 320(DX)
+	VMOVDQU      Y14, 384(DX)
+	VMOVDQU      Y15, 448(DX)
+	VMOVDQA      192(BP), Y0
+	VMOVDQA      224(BP), Y1
+	VMOVDQA      256(BP), Y2
+	VMOVDQA      288(BP), Y3
+	VMOVDQA      320(BP), Y4
+	VMOVDQA      352(BP), Y5
+	VMOVDQA      384(BP), Y6
+	VMOVDQA      416(BP), Y7
+	VPBROADCASTD 32(BP), Y8
+	VPBROADCASTD 4+32(BP), Y9
+	VPBROADCASTD 8+32(BP), Y10
+	VPBROADCASTD 12+32(BP), Y11
+	VMOVDQA      128(BP), Y12
+	VMOVDQA      160(BP), Y13
+	VPBROADCASTD 8+48(BP), Y14
+	VPBROADCASTD 12+48(BP), Y15
+	VPADDD       Y8, Y0, Y0
+	VPADDD       Y9, Y1, Y1
+	VPADDD       Y10, Y2, Y2
+	VPADDD       Y11, Y3, Y3
+	VPADDD       Y12, Y4, Y4
+	VPADDD       Y13, Y5, Y5
+	VPADDD       Y14, Y6, Y6
+	VPADDD       Y15, Y7, Y7
+	VPUNPCKLDQ   Y1, Y0, Y8
+	VPUNPCKLDQ   Y3, Y2, Y9
+	VPUNPCKHDQ   Y1, Y0, Y12
+	VPUNPCKHDQ   Y3, Y2, Y13
+	VPUNPCKLDQ   Y5, Y4, Y10
+	VPUNPCKLDQ   Y7, Y6, Y11
+	VPUNPCKHDQ   Y5, Y4, Y14
+	VPUNPCKHDQ   Y7, Y6, Y15
+	VPUNPCKLQDQ  Y9, Y8, Y0
+	VPUNPCKLQDQ  Y11, Y10, Y1
+	VPUNPCKHQDQ  Y9, Y8, Y2
+	VPUNPCKHQDQ  Y11, Y10, Y3
+	VPUNPCKLQDQ  Y13, Y12, Y4
+	VPUNPCKLQDQ  Y15, Y14, Y5
+	VPUNPCKHQDQ  Y13, Y12, Y6
+	VPUNPCKHQDQ  Y15, Y14, Y7
+	VPERM2I128   $0x20, Y1, Y0, Y8
+	VPERM2I128   $0x20, Y3, Y2, Y9
+	VPERM2I128   $0x31, Y1, Y0, Y12
+	VPERM2I128   $0x31, Y3, Y2, Y13
+	VPERM2I128   $0x20, Y5, Y4, Y10
+	VPERM2I128   $0x20, Y7, Y6, Y11
+	VPERM2I128   $0x31, Y5, Y4, Y14
+	VPERM2I128   $0x31, Y7, Y6, Y15
+	VMOVDQU      Y8, 32(DX)
+	VMOVDQU      Y9, 96(DX)
+	VMOVDQU      Y10, 160(DX)
+	VMOVDQU      Y11, 224(DX)
+	VMOVDQU      Y12, 288(DX)
+	VMOVDQU      Y13, 352(DX)
+	VMOVDQU      Y14, 416(DX)
+	VMOVDQU      Y15, 480(DX)
+
+chacha_blocks_avx2_mainloop1_cont:
+	ADDQ $512, DX
+	SUBQ $512, CX
+	CMPQ CX, $512
+	JAE  chacha_blocks_avx2_atleast512
+	CMPQ CX, $256
+	JB   chacha_blocks_avx2_below256_fixup
+
+chacha_blocks_avx2_atleast256:
+	MOVQ 48(BP), AX
+	LEAQ 1(AX), R8
+	LEAQ 2(AX), R9
+	LEAQ 3(AX), R10
+	LEAQ 4(AX), BX
+	MOVL AX, 128(BP)
+	MOVL R8, 4+128(BP)
+	MOVL R9, 8+128(BP)
+	MOVL R10, 12+128(BP)
+	SHRQ $32, AX
+	SHRQ $32, R8
+	SHRQ $32, R9
+	SHRQ $32, R10
+	MOVL AX, 160(BP)
+	MOVL R8, 4+160(BP)
+	MOVL R9, 8+160(BP)
+	MOVL R10, 12+160(BP)
+	MOVQ BX, 48(BP)
+
+	// MOVQ 64(BP), AX
+	MOVQ         $20, AX
+	VPBROADCASTD 0(BP), X0
+	VPBROADCASTD 4+0(BP), X1
+	VPBROADCASTD 8+0(BP), X2
+	VPBROADCASTD 12+0(BP), X3
+	VPBROADCASTD 16(BP), X4
+	VPBROADCASTD 4+16(BP), X5
+	VPBROADCASTD 8+16(BP), X6
+	VPBROADCASTD 12+16(BP), X7
+	VPBROADCASTD 32(BP), X8
+	VPBROADCASTD 4+32(BP), X9
+	VPBROADCASTD 8+32(BP), X10
+	VPBROADCASTD 12+32(BP), X11
+	VMOVDQA      128(BP), X12
+	VMOVDQA      160(BP), X13
+	VPBROADCASTD 8+48(BP), X14
+	VPBROADCASTD 12+48(BP), X15
+
+chacha_blocks_avx2_mainloop2:
+	VPADDD       X0, X4, X0
+	VPADDD       X1, X5, X1
+	VPXOR        X12, X0, X12
+	VPXOR        X13, X1, X13
+	VPADDD       X2, X6, X2
+	VPADDD       X3, X7, X3
+	VPXOR        X14, X2, X14
+	VPXOR        X15, X3, X15
+	VPSHUFB      448(BP), X12, X12
+	VPSHUFB      448(BP), X13, X13
+	VPADDD       X8, X12, X8
+	VPADDD       X9, X13, X9
+	VPSHUFB      448(BP), X14, X14
+	VPSHUFB      448(BP), X15, X15
+	VPADDD       X10, X14, X10
+	VPADDD       X11, X15, X11
+	VMOVDQA      X12, 96(BP)
+	VPXOR        X4, X8, X4
+	VPXOR        X5, X9, X5
+	VPSLLD       $ 12, X4, X12
+	VPSRLD       $20, X4, X4
+	VPXOR        X4, X12, X4
+	VPSLLD       $ 12, X5, X12
+	VPSRLD       $20, X5, X5
+	VPXOR        X5, X12, X5
+	VPXOR        X6, X10, X6
+	VPXOR        X7, X11, X7
+	VPSLLD       $ 12, X6, X12
+	VPSRLD       $20, X6, X6
+	VPXOR        X6, X12, X6
+	VPSLLD       $ 12, X7, X12
+	VPSRLD       $20, X7, X7
+	VPXOR        X7, X12, X7
+	VPADDD       X0, X4, X0
+	VPADDD       X1, X5, X1
+	VPXOR        96(BP), X0, X12
+	VPXOR        X13, X1, X13
+	VPADDD       X2, X6, X2
+	VPADDD       X3, X7, X3
+	VPXOR        X14, X2, X14
+	VPXOR        X15, X3, X15
+	VPSHUFB      480(BP), X12, X12
+	VPSHUFB      480(BP), X13, X13
+	VPADDD       X8, X12, X8
+	VPADDD       X9, X13, X9
+	VPSHUFB      480(BP), X14, X14
+	VPSHUFB      480(BP), X15, X15
+	VPADDD       X10, X14, X10
+	VPADDD       X11, X15, X11
+	VMOVDQA      X12, 96(BP)
+	VPXOR        X4, X8, X4
+	VPXOR        X5, X9, X5
+	VPSLLD       $ 7, X4, X12
+	VPSRLD       $25, X4, X4
+	VPXOR        X4, X12, X4
+	VPSLLD       $ 7, X5, X12
+	VPSRLD       $25, X5, X5
+	VPXOR        X5, X12, X5
+	VPXOR        X6, X10, X6
+	VPXOR        X7, X11, X7
+	VPSLLD       $ 7, X6, X12
+	VPSRLD       $25, X6, X6
+	VPXOR        X6, X12, X6
+	VPSLLD       $ 7, X7, X12
+	VPSRLD       $25, X7, X7
+	VPXOR        X7, X12, X7
+	VPADDD       X0, X5, X0
+	VPADDD       X1, X6, X1
+	VPXOR        X15, X0, X15
+	VPXOR        96(BP), X1, X12
+	VPADDD       X2, X7, X2
+	VPADDD       X3, X4, X3
+	VPXOR        X13, X2, X13
+	VPXOR        X14, X3, X14
+	VPSHUFB      448(BP), X15, X15
+	VPSHUFB      448(BP), X12, X12
+	VPADDD       X10, X15, X10
+	VPADDD       X11, X12, X11
+	VPSHUFB      448(BP), X13, X13
+	VPSHUFB      448(BP), X14, X14
+	VPADDD       X8, X13, X8
+	VPADDD       X9, X14, X9
+	VMOVDQA      X15, 96(BP)
+	VPXOR        X5, X10, X5
+	VPXOR        X6, X11, X6
+	VPSLLD       $ 12, X5, X15
+	VPSRLD       $20, X5, X5
+	VPXOR        X5, X15, X5
+	VPSLLD       $ 12, X6, X15
+	VPSRLD       $20, X6, X6
+	VPXOR        X6, X15, X6
+	VPXOR        X7, X8, X7
+	VPXOR        X4, X9, X4
+	VPSLLD       $ 12, X7, X15
+	VPSRLD       $20, X7, X7
+	VPXOR        X7, X15, X7
+	VPSLLD       $ 12, X4, X15
+	VPSRLD       $20, X4, X4
+	VPXOR        X4, X15, X4
+	VPADDD       X0, X5, X0
+	VPADDD       X1, X6, X1
+	VPXOR        96(BP), X0, X15
+	VPXOR        X12, X1, X12
+	VPADDD       X2, X7, X2
+	VPADDD       X3, X4, X3
+	VPXOR        X13, X2, X13
+	VPXOR        X14, X3, X14
+	VPSHUFB      480(BP), X15, X15
+	VPSHUFB      480(BP), X12, X12
+	VPADDD       X10, X15, X10
+	VPADDD       X11, X12, X11
+	VPSHUFB      480(BP), X13, X13
+	VPSHUFB      480(BP), X14, X14
+	VPADDD       X8, X13, X8
+	VPADDD       X9, X14, X9
+	VMOVDQA      X15, 96(BP)
+	VPXOR        X5, X10, X5
+	VPXOR        X6, X11, X6
+	VPSLLD       $ 7, X5, X15
+	VPSRLD       $25, X5, X5
+	VPXOR        X5, X15, X5
+	VPSLLD       $ 7, X6, X15
+	VPSRLD       $25, X6, X6
+	VPXOR        X6, X15, X6
+	VPXOR        X7, X8, X7
+	VPXOR        X4, X9, X4
+	VPSLLD       $ 7, X7, X15
+	VPSRLD       $25, X7, X7
+	VPXOR        X7, X15, X7
+	VPSLLD       $ 7, X4, X15
+	VPSRLD       $25, X4, X4
+	VPXOR        X4, X15, X4
+	VMOVDQA      96(BP), X15
+	SUBQ         $2, AX
+	JNZ          chacha_blocks_avx2_mainloop2
+	VMOVDQA      X8, 192(BP)
+	VMOVDQA      X9, 208(BP)
+	VMOVDQA      X10, 224(BP)
+	VMOVDQA      X11, 240(BP)
+	VMOVDQA      X12, 256(BP)
+	VMOVDQA      X13, 272(BP)
+	VMOVDQA      X14, 288(BP)
+	VMOVDQA      X15, 304(BP)
+	VPBROADCASTD 0(BP), X8
+	VPBROADCASTD 4+0(BP), X9
+	VPBROADCASTD 8+0(BP), X10
+	VPBROADCASTD 12+0(BP), X11
+	VPBROADCASTD 16(BP), X12
+	VPBROADCASTD 4+16(BP), X13
+	VPBROADCASTD 8+16(BP), X14
+	VPBROADCASTD 12+16(BP), X15
+	VPADDD       X8, X0, X0
+	VPADDD       X9, X1, X1
+	VPADDD       X10, X2, X2
+	VPADDD       X11, X3, X3
+	VPADDD       X12, X4, X4
+	VPADDD       X13, X5, X5
+	VPADDD       X14, X6, X6
+	VPADDD       X15, X7, X7
+	VPUNPCKLDQ   X1, X0, X8
+	VPUNPCKLDQ   X3, X2, X9
+	VPUNPCKHDQ   X1, X0, X12
+	VPUNPCKHDQ   X3, X2, X13
+	VPUNPCKLDQ   X5, X4, X10
+	VPUNPCKLDQ   X7, X6, X11
+	VPUNPCKHDQ   X5, X4, X14
+	VPUNPCKHDQ   X7, X6, X15
+	VPUNPCKLQDQ  X9, X8, X0
+	VPUNPCKLQDQ  X11, X10, X1
+	VPUNPCKHQDQ  X9, X8, X2
+	VPUNPCKHQDQ  X11, X10, X3
+	VPUNPCKLQDQ  X13, X12, X4
+	VPUNPCKLQDQ  X15, X14, X5
+	VPUNPCKHQDQ  X13, X12, X6
+	VPUNPCKHQDQ  X15, X14, X7
+	ANDQ         SI, SI
+	JZ           chacha_blocks_avx2_noinput2
+	VPXOR        0(SI), X0, X0
+	VPXOR        16(SI), X1, X1
+	VPXOR        64(SI), X2, X2
+	VPXOR        80(SI), X3, X3
+	VPXOR        128(SI), X4, X4
+	VPXOR        144(SI), X5, X5
+	VPXOR        192(SI), X6, X6
+	VPXOR        208(SI), X7, X7
+	VMOVDQU      X0, 0(DX)
+	VMOVDQU      X1, 16(DX)
+	VMOVDQU      X2, 64(DX)
+	VMOVDQU      X3, 80(DX)
+	VMOVDQU      X4, 128(DX)
+	VMOVDQU      X5, 144(DX)
+	VMOVDQU      X6, 192(DX)
+	VMOVDQU      X7, 208(DX)
+	VMOVDQA      192(BP), X0
+	VMOVDQA      208(BP), X1
+	VMOVDQA      224(BP), X2
+	VMOVDQA      240(BP), X3
+	VMOVDQA      256(BP), X4
+	VMOVDQA      272(BP), X5
+	VMOVDQA      288(BP), X6
+	VMOVDQA      304(BP), X7
+	VPBROADCASTD 32(BP), X8
+	VPBROADCASTD 4+32(BP), X9
+	VPBROADCASTD 8+32(BP), X10
+	VPBROADCASTD 12+32(BP), X11
+	VMOVDQA      128(BP), X12
+	VMOVDQA      160(BP), X13
+	VPBROADCASTD 8+48(BP), X14
+	VPBROADCASTD 12+48(BP), X15
+	VPADDD       X8, X0, X0
+	VPADDD       X9, X1, X1
+	VPADDD       X10, X2, X2
+	VPADDD       X11, X3, X3
+	VPADDD       X12, X4, X4
+	VPADDD       X13, X5, X5
+	VPADDD       X14, X6, X6
+	VPADDD       X15, X7, X7
+	VPUNPCKLDQ   X1, X0, X8
+	VPUNPCKLDQ   X3, X2, X9
+	VPUNPCKHDQ   X1, X0, X12
+	VPUNPCKHDQ   X3, X2, X13
+	VPUNPCKLDQ   X5, X4, X10
+	VPUNPCKLDQ   X7, X6, X11
+	VPUNPCKHDQ   X5, X4, X14
+	VPUNPCKHDQ   X7, X6, X15
+	VPUNPCKLQDQ  X9, X8, X0
+	VPUNPCKLQDQ  X11, X10, X1
+	VPUNPCKHQDQ  X9, X8, X2
+	VPUNPCKHQDQ  X11, X10, X3
+	VPUNPCKLQDQ  X13, X12, X4
+	VPUNPCKLQDQ  X15, X14, X5
+	VPUNPCKHQDQ  X13, X12, X6
+	VPUNPCKHQDQ  X15, X14, X7
+	VPXOR        32(SI), X0, X0
+	VPXOR        48(SI), X1, X1
+	VPXOR        96(SI), X2, X2
+	VPXOR        112(SI), X3, X3
+	VPXOR        160(SI), X4, X4
+	VPXOR        176(SI), X5, X5
+	VPXOR        224(SI), X6, X6
+	VPXOR        240(SI), X7, X7
+	VMOVDQU      X0, 32(DX)
+	VMOVDQU      X1, 48(DX)
+	VMOVDQU      X2, 96(DX)
+	VMOVDQU      X3, 112(DX)
+	VMOVDQU      X4, 160(DX)
+	VMOVDQU      X5, 176(DX)
+	VMOVDQU      X6, 224(DX)
+	VMOVDQU      X7, 240(DX)
+	ADDQ         $256, SI
+	JMP          chacha_blocks_avx2_mainloop2_cont
+
+chacha_blocks_avx2_noinput2:
+	VMOVDQU      X0, 0(DX)
+	VMOVDQU      X1, 16(DX)
+	VMOVDQU      X2, 64(DX)
+	VMOVDQU      X3, 80(DX)
+	VMOVDQU      X4, 128(DX)
+	VMOVDQU      X5, 144(DX)
+	VMOVDQU      X6, 192(DX)
+	VMOVDQU      X7, 208(DX)
+	VMOVDQA      192(BP), X0
+	VMOVDQA      208(BP), X1
+	VMOVDQA      224(BP), X2
+	VMOVDQA      240(BP), X3
+	VMOVDQA      256(BP), X4
+	VMOVDQA      272(BP), X5
+	VMOVDQA      288(BP), X6
+	VMOVDQA      304(BP), X7
+	VPBROADCASTD 32(BP), X8
+	VPBROADCASTD 4+32(BP), X9
+	VPBROADCASTD 8+32(BP), X10
+	VPBROADCASTD 12+32(BP), X11
+	VMOVDQA      128(BP), X12
+	VMOVDQA      160(BP), X13
+	VPBROADCASTD 8+48(BP), X14
+	VPBROADCASTD 12+48(BP), X15
+	VPADDD       X8, X0, X0
+	VPADDD       X9, X1, X1
+	VPADDD       X10, X2, X2
+	VPADDD       X11, X3, X3
+	VPADDD       X12, X4, X4
+	VPADDD       X13, X5, X5
+	VPADDD       X14, X6, X6
+	VPADDD       X15, X7, X7
+	VPUNPCKLDQ   X1, X0, X8
+	VPUNPCKLDQ   X3, X2, X9
+	VPUNPCKHDQ   X1, X0, X12
+	VPUNPCKHDQ   X3, X2, X13
+	VPUNPCKLDQ   X5, X4, X10
+	VPUNPCKLDQ   X7, X6, X11
+	VPUNPCKHDQ   X5, X4, X14
+	VPUNPCKHDQ   X7, X6, X15
+	VPUNPCKLQDQ  X9, X8, X0
+	VPUNPCKLQDQ  X11, X10, X1
+	VPUNPCKHQDQ  X9, X8, X2
+	VPUNPCKHQDQ  X11, X10, X3
+	VPUNPCKLQDQ  X13, X12, X4
+	VPUNPCKLQDQ  X15, X14, X5
+	VPUNPCKHQDQ  X13, X12, X6
+	VPUNPCKHQDQ  X15, X14, X7
+	VMOVDQU      X0, 32(DX)
+	VMOVDQU      X1, 48(DX)
+	VMOVDQU      X2, 96(DX)
+	VMOVDQU      X3, 112(DX)
+	VMOVDQU      X4, 160(DX)
+	VMOVDQU      X5, 176(DX)
+	VMOVDQU      X6, 224(DX)
+	VMOVDQU      X7, 240(DX)
+
+chacha_blocks_avx2_mainloop2_cont:
+	ADDQ $256, DX
+	SUBQ $256, CX
+	CMPQ CX, $256
+	JAE  chacha_blocks_avx2_atleast256
+
+chacha_blocks_avx2_below256_fixup:
+	VMOVDQA 448(BP), X6
+	VMOVDQA 480(BP), X7
+	VMOVDQA 0(BP), X8
+	VMOVDQA 16(BP), X9
+	VMOVDQA 32(BP), X10
+	VMOVDQA 48(BP), X11
+	MOVQ    $1, R9
+
+chacha_blocks_avx2_below256:
+	VMOVQ R9, X5
+	ANDQ  CX, CX
+	JZ    chacha_blocks_avx2_done
+	CMPQ  CX, $64
+	JAE   chacha_blocks_avx2_above63
+	MOVQ  DX, R9
+	ANDQ  SI, SI
+	JZ    chacha_blocks_avx2_noinput3
+	MOVQ  CX, R10
+	MOVQ  BP, DX
+	ADDQ  R10, SI
+	ADDQ  R10, DX
+	NEGQ  R10
+
+chacha_blocks_avx2_copyinput:
+	MOVB (SI)(R10*1), AX
+	MOVB AX, (DX)(R10*1)
+	INCQ R10
+	JNZ  chacha_blocks_avx2_copyinput
+	MOVQ BP, SI
+
+chacha_blocks_avx2_noinput3:
+	MOVQ BP, DX
+
+chacha_blocks_avx2_above63:
+	VMOVDQA X8, X0
+	VMOVDQA X9, X1
+	VMOVDQA X10, X2
+	VMOVDQA X11, X3
+
+	// MOVQ 64(BP), AX
+	MOVQ $20, AX
+
+chacha_blocks_avx2_mainloop3:
+	VPADDD  X0, X1, X0
+	VPXOR   X3, X0, X3
+	VPSHUFB X6, X3, X3
+	VPADDD  X2, X3, X2
+	VPXOR   X1, X2, X1
+	VPSLLD  $12, X1, X4
+	VPSRLD  $20, X1, X1
+	VPXOR   X1, X4, X1
+	VPADDD  X0, X1, X0
+	VPXOR   X3, X0, X3
+	VPSHUFB X7, X3, X3
+	VPSHUFD $0x93, X0, X0
+	VPADDD  X2, X3, X2
+	VPSHUFD $0x4e, X3, X3
+	VPXOR   X1, X2, X1
+	VPSHUFD $0x39, X2, X2
+	VPSLLD  $7, X1, X4
+	VPSRLD  $25, X1, X1
+	VPXOR   X1, X4, X1
+	VPADDD  X0, X1, X0
+	VPXOR   X3, X0, X3
+	VPSHUFB X6, X3, X3
+	VPADDD  X2, X3, X2
+	VPXOR   X1, X2, X1
+	VPSLLD  $12, X1, X4
+	VPSRLD  $20, X1, X1
+	VPXOR   X1, X4, X1
+	VPADDD  X0, X1, X0
+	VPXOR   X3, X0, X3
+	VPSHUFB X7, X3, X3
+	VPSHUFD $0x39, X0, X0
+	VPADDD  X2, X3, X2
+	VPSHUFD $0x4e, X3, X3
+	VPXOR   X1, X2, X1
+	VPSHUFD $0x93, X2, X2
+	VPSLLD  $7, X1, X4
+	VPSRLD  $25, X1, X1
+	VPXOR   X1, X4, X1
+	SUBQ    $2, AX
+	JNZ     chacha_blocks_avx2_mainloop3
+	VPADDD  X0, X8, X0
+	VPADDD  X1, X9, X1
+	VPADDD  X2, X10, X2
+	VPADDD  X3, X11, X3
+	ANDQ    SI, SI
+	JZ      chacha_blocks_avx2_noinput4
+	VPXOR   0(SI), X0, X0
+	VPXOR   16(SI), X1, X1
+	VPXOR   32(SI), X2, X2
+	VPXOR   48(SI), X3, X3
+	ADDQ    $64, SI
+
+chacha_blocks_avx2_noinput4:
+	VMOVDQU X0, 0(DX)
+	VMOVDQU X1, 16(DX)
+	VMOVDQU X2, 32(DX)
+	VMOVDQU X3, 48(DX)
+	VPADDQ  X11, X5, X11
+	CMPQ    CX, $64
+	JBE     chacha_blocks_avx2_mainloop3_finishup
+	ADDQ    $64, DX
+	SUBQ    $64, CX
+	JMP     chacha_blocks_avx2_below256
+
+chacha_blocks_avx2_mainloop3_finishup:
+	CMPQ CX, $64
+	JE   chacha_blocks_avx2_done
+	ADDQ CX, R9
+	ADDQ CX, DX
+	NEGQ CX
+
+chacha_blocks_avx2_copyoutput:
+	MOVB (DX)(CX*1), AX
+	MOVB AX, (R9)(CX*1)
+	INCQ CX
+	JNZ  chacha_blocks_avx2_copyoutput
+
+chacha_blocks_avx2_done:
+	VMOVDQA X11, 32(DI)
+
+	VZEROUPPER
+	RET
+
+DATA ·m60_mask<>+0x00(SB)/8, $0x0fffffffffffffff
+DATA ·m60_mask<>+0x08(SB)/8, $0x0fffffffffffffff
+GLOBL ·m60_mask<>(SB), (NOPTR+RODATA), $16
+
+// func hashStepAVX2(ctx *hs1Ctx, in []byte, accum *[hs1HashRounds]uint64)
+TEXT ·hashStepAVX2(SB), NOSPLIT, $0-40
+	MOVQ in+16(FP), CX // len(in) -> CX (inbytes)
+
+	ANDQ CX, CX
+	JZ   hash_step_done
+
+	MOVQ ctx+0(FP), DI        // ctx -> DI
+	MOVQ in+8(FP), SI         // &in[0] -> SI (mp)
+	MOVQ accum+32(FP), R15    // accum -> R15
+	MOVO ·m60_mask<>(SB), X15
+
+	MOVQ (R15), AX    // accum[0] -> AX
+	MOVQ 8(R15), BX   // accum[1] -> BX
+	MOVQ 16(R15), R11 // accum[2] -> R11
+	MOVQ 24(R15), R12 // accum[3] -> R12
+	MOVQ 32(R15), R13 // accum[4] -> R13
+	MOVQ 40(R15), R14 // accum[4] -> R14
+
+hash_step_start:
+	VPXOR Y0, Y0, Y0
+	VPXOR Y1, Y1, Y1
+	VPXOR Y2, Y2, Y2
+	VPXOR Y3, Y3, Y3
+	VPXOR Y4, Y4, Y4
+	VPXOR Y5, Y5, Y5
+
+	MOVQ DI, R9 // R9 -> ctx->nh_key (kp)
+	MOVQ $2, R8
+
+hash_rounds_loop:
+	VMOVDQU (SI), Y14 // mp
+
+	VMOVDQU  (R9), Y6
+	VMOVDQU  16(R9), Y7
+	VPADDD   Y14, Y6, Y6
+	VPADDD   Y14, Y7, Y7
+	VPSHUFD  $0x05, Y6, Y8
+	VPSHUFD  $0xaf, Y6, Y9
+	VPMULUDQ Y8, Y9, Y6
+	VPADDQ   Y0, Y6, Y0
+	VPSHUFD  $0x05, Y7, Y8
+	VPSHUFD  $0xaf, Y7, Y9
+	VPMULUDQ Y8, Y9, Y7
+	VPADDQ   Y1, Y7, Y1
+
+	VMOVDQU  32(R9), Y6
+	VMOVDQU  48(R9), Y7
+	VPADDD   Y14, Y6, Y6
+	VPADDD   Y14, Y7, Y7
+	VPSHUFD  $0x05, Y6, Y8
+	VPSHUFD  $0xaf, Y6, Y9
+	VPMULUDQ Y8, Y9, Y6
+	VPADDQ   Y2, Y6, Y2
+	VPSHUFD  $0x05, Y7, Y8
+	VPSHUFD  $0xaf, Y7, Y9
+	VPMULUDQ Y8, Y9, Y7
+	VPADDQ   Y3, Y7, Y3
+
+	VMOVDQU  64(R9), Y6
+	VMOVDQU  80(R9), Y7
+	VPADDD   Y14, Y6, Y6
+	VPADDD   Y14, Y7, Y7
+	VPSHUFD  $0x05, Y6, Y8
+	VPSHUFD  $0xaf, Y6, Y9
+	VPMULUDQ Y8, Y9, Y6
+	VPADDQ   Y4, Y6, Y4
+	VPSHUFD  $0x05, Y7, Y8
+	VPSHUFD  $0xaf, Y7, Y9
+	VPMULUDQ Y8, Y9, Y7
+	VPADDQ   Y5, Y7, Y5
+
+	ADDQ $32, SI
+	ADDQ $32, R9
+	DECQ R8
+	JNZ  hash_rounds_loop
+
+	MOVQ $0x1fffffffffffffff, R8 // m61
+
+	VEXTRACTI128 $1, Y0, X6
+	VEXTRACTI128 $1, Y1, X7
+	VPADDQ       X0, X6, X0
+	VPADDQ       X1, X7, X1
+	VPSRLDQ      $8, X0, X6
+	VPSRLDQ      $8, X1, X7
+	VPADDQ       X0, X6, X0
+	VPADDQ       X1, X7, X1
+	VPAND        X0, X15, X0
+	VPAND        X1, X15, X1
+
+	MOVQ  AX, DX
+	VMOVQ X0, AX
+	BYTE  $0xc4; BYTE $0xe2; BYTE $0xab; BYTE $0xf6; BYTE $0x97; BYTE $0x90; BYTE $0x00; BYTE $0x00; BYTE $0x00 // MULX 144(DI), R10, DX
+	MOVQ  R10, R9
+	ANDQ  R8, R9
+	SHRQ  $61, DX, R10
+	ADDQ  R9, R10
+	ADDQ  R10, AX
+
+	MOVQ  BX, DX
+	VMOVQ X1, BX
+	BYTE  $0xc4; BYTE $0xe2; BYTE $0xab; BYTE $0xf6; BYTE $0x97; BYTE $0x98; BYTE $0x00; BYTE $0x00; BYTE $0x00 // MULX 152(DI), R10, DX
+	MOVQ  R10, R9
+	ANDQ  R8, R9
+	SHRQ  $61, DX, R10
+	ADDQ  R9, R10
+	ADDQ  R10, BX
+
+	VEXTRACTI128 $1, Y2, X6
+	VEXTRACTI128 $1, Y3, X7
+	VPADDQ       X2, X6, X2
+	VPADDQ       X3, X7, X3
+	VPSRLDQ      $8, X2, X6
+	VPSRLDQ      $8, X3, X7
+	VPADDQ       X2, X6, X2
+	VPADDQ       X3, X7, X3
+	VPAND        X2, X15, X2
+	VPAND        X3, X15, X3
+
+	MOVQ  R11, DX
+	VMOVQ X2, R11
+	BYTE  $0xc4; BYTE $0xe2; BYTE $0xab; BYTE $0xf6; BYTE $0x97; BYTE $0xa0; BYTE $0x00; BYTE $0x00; BYTE $0x00 // MULX 160(DI), R10, DX
+	MOVQ  R10, R9
+	ANDQ  R8, R9
+	SHRQ  $61, DX, R10
+	ADDQ  R9, R10
+	ADDQ  R10, R11
+
+	MOVQ  R12, DX
+	VMOVQ X3, R12
+	BYTE  $0xc4; BYTE $0xe2; BYTE $0xab; BYTE $0xf6; BYTE $0x97; BYTE $0xa8; BYTE $0x00; BYTE $0x00; BYTE $0x00 // MULX 168(DI), R10, DX
+	MOVQ  R10, R9
+	ANDQ  R8, R9
+	SHRQ  $61, DX, R10
+	ADDQ  R9, R10
+	ADDQ  R10, R12
+
+	VEXTRACTI128 $1, Y4, X6
+	VEXTRACTI128 $1, Y5, X7
+	VPADDQ       X4, X6, X4
+	VPADDQ       X5, X7, X5
+	VPSRLDQ      $8, X4, X6
+	VPSRLDQ      $8, X5, X7
+	VPADDQ       X4, X6, X4
+	VPADDQ       X5, X7, X5
+	VPAND        X4, X15, X4
+	VPAND        X5, X15, X5
+
+	MOVQ  R13, DX
+	VMOVQ X4, R13
+	BYTE  $0xc4; BYTE $0xe2; BYTE $0xab; BYTE $0xf6; BYTE $0x97; BYTE $0xb0; BYTE $0x00; BYTE $0x00; BYTE $0x00 // MULX 176(DI), R10, DX
+	MOVQ  R10, R9
+	ANDQ  R8, R9
+	SHRQ  $61, DX, R10
+	ADDQ  R9, R10
+	ADDQ  R10, R13
+
+	MOVQ  R14, DX
+	VMOVQ X5, R14
+	BYTE  $0xc4; BYTE $0xe2; BYTE $0xab; BYTE $0xf6; BYTE $0x97; BYTE $0xb8; BYTE $0x00; BYTE $0x00; BYTE $0x00 // MULX 184(DI), R10, DX
+	MOVQ  R10, R9
+	ANDQ  R8, R9
+	SHRQ  $61, DX, R10
+	ADDQ  R9, R10
+	ADDQ  R10, R14
+
+	SUBQ $64, CX
+	JNZ  hash_step_start
+
+	MOVQ AX, (R15)    // AX -> accum[0]
+	MOVQ BX, 8(R15)   // BX -> accum[1]
+	MOVQ R11, 16(R15) // R11 -> accum[2]
+	MOVQ R12, 24(R15) // accum[3] -> R12
+	MOVQ R13, 32(R15) // accum[4] -> R13
+	MOVQ R14, 40(R15) // accum[4] -> R14
+
+hash_step_done:
+	VZEROUPPER
+	RET

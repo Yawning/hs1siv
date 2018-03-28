@@ -56,6 +56,13 @@ func chacha20(key, nonce, in, out []byte, initialCounter uint32) {
 		binary.LittleEndian.Uint32(nonce[8:12]),
 	}
 
+	hardwareAccelImpl.chachaXORKeyStreamFn(s, in, out)
+
+	// Purge the state off the stack.
+	burnUint32s(s[:])
+}
+
+func chachaXORKeyStreamRef(s *chachaState, in, out []byte) {
 	// Process full blocks.
 	off, inLen := 0, len(in)
 	if fullBlocks := inLen / chachaBlockSize; fullBlocks > 0 {
@@ -71,9 +78,6 @@ func chacha20(key, nonce, in, out []byte, initialCounter uint32) {
 		chachaBlocksRef(s, partial[:], partial[:], 1)
 		copy(out[off:], partial[:])
 	}
-
-	// Purge the state off the stack.
-	burnUint32s(s[:])
 }
 
 func chachaBlocksRef(s *chachaState, in, out []byte, nrBlocks int) {

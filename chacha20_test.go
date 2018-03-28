@@ -15,8 +15,17 @@ import (
 )
 
 func TestChaCha20(t *testing.T) {
-	// Eventually this will go away, and be called per implementation.
-	doTestChaCha20(t)
+	forceDisableHardwareAcceleration()
+	impl := "_" + hardwareAccelImpl.name
+	t.Run("ChaCha20"+impl, func(t *testing.T) { doTestChaCha20(t) })
+
+	if !canAccelerate {
+		t.Log("Hardware acceleration not supported on this host.")
+		return
+	}
+	mustInitHardwareAcceleration()
+	impl = "_" + hardwareAccelImpl.name
+	t.Run("ChaCha20"+impl, func(t *testing.T) { doTestChaCha20(t) })
 }
 
 var rfc7539TestVectors = []struct {
@@ -232,13 +241,29 @@ func doTestChaCha20(t *testing.T) {
 }
 
 func BenchmarkChaCha20(b *testing.B) {
+	forceDisableHardwareAcceleration()
+	doBenchmarkChaCha20(b)
+
+	if !canAccelerate {
+		b.Log("Hardware acceleration not supported on this host.")
+		return
+	}
+	mustInitHardwareAcceleration()
+	doBenchmarkChaCha20(b)
+}
+
+func doBenchmarkChaCha20(b *testing.B) {
 	benchSizes := []int{8, 32, 64, 576, 1536, 4096, 1024768}
+	impl := "_" + hardwareAccelImpl.name
+
 	for _, sz := range benchSizes {
-		b.Run(fmt.Sprintf("ChaCha20_%d", sz), func(b *testing.B) { doBenchmarkChaCha20(b, sz) })
+		bn := "ChaCha20" + impl + "_"
+		sn := fmt.Sprintf("%d", sz)
+		b.Run(bn+sn, func(b *testing.B) { doBenchmarkChaCha20KeyStream(b, sz) })
 	}
 }
 
-func doBenchmarkChaCha20(b *testing.B, sz int) {
+func doBenchmarkChaCha20KeyStream(b *testing.B, sz int) {
 	var k [chachaKeySize]byte
 	var n [chachaNonceSize]byte
 	buf := make([]byte, sz)
