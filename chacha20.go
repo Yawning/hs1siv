@@ -34,6 +34,9 @@ func chacha20(key, nonce, in, out []byte, initialCounter uint32) {
 	if len(nonce) != chachaNonceSize {
 		panic("hs1siv: invalid chacha nonce size")
 	}
+	if len(in) == 0 {
+		return
+	}
 
 	if len(out) < len(in) {
 		in = in[:len(out)]
@@ -56,7 +59,7 @@ func chacha20(key, nonce, in, out []byte, initialCounter uint32) {
 		binary.LittleEndian.Uint32(nonce[8:12]),
 	}
 
-	hardwareAccelImpl.chachaXORKeyStreamFn(s, in, out)
+	chachaXORKeyStream(s, in, out)
 
 	// Purge the state off the stack.
 	burnUint32s(s[:])

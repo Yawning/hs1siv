@@ -63,12 +63,12 @@ TEXT ·chachaXORKeyStreamAVX2(SB), NOSPLIT, $544-56
 	//  * The number of rounds is always 20.
 	//  * %rbp is used instead of %rsp.
 	LEAQ    ·chacha_constants<>(SB), AX
-	VMOVDQA 0(AX), X8
-	VMOVDQA 16(AX), X6
-	VMOVDQA 32(AX), X7
-	VMOVDQA 0(DI), X9
-	VMOVDQA 16(DI), X10
-	VMOVDQA 32(DI), X11
+	VMOVDQU 0(AX), X8
+	VMOVDQU 16(AX), X6
+	VMOVDQU 32(AX), X7
+	VMOVDQU 0(DI), X9
+	VMOVDQU 16(DI), X10
+	VMOVDQU 32(DI), X11
 
 	// MOVQ 48(DI), AX
 	MOVQ    $1, R9
@@ -964,7 +964,7 @@ chacha_blocks_avx2_copyoutput:
 	JNZ  chacha_blocks_avx2_copyoutput
 
 chacha_blocks_avx2_done:
-	VMOVDQA X11, 32(DI)
+	VMOVDQU X11, 32(DI)
 
 	VZEROUPPER
 	RET

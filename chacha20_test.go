@@ -16,7 +16,7 @@ import (
 
 func TestChaCha20(t *testing.T) {
 	forceDisableHardwareAcceleration()
-	impl := "_" + hardwareAccelImpl.name
+	impl := "_" + hardwareAccelImpl
 	t.Run("ChaCha20"+impl, func(t *testing.T) { doTestChaCha20(t) })
 
 	if !canAccelerate {
@@ -24,7 +24,7 @@ func TestChaCha20(t *testing.T) {
 		return
 	}
 	mustInitHardwareAcceleration()
-	impl = "_" + hardwareAccelImpl.name
+	impl = "_" + hardwareAccelImpl
 	t.Run("ChaCha20"+impl, func(t *testing.T) { doTestChaCha20(t) })
 }
 
@@ -254,7 +254,7 @@ func BenchmarkChaCha20(b *testing.B) {
 
 func doBenchmarkChaCha20(b *testing.B) {
 	benchSizes := []int{8, 32, 64, 576, 1536, 4096, 1024768}
-	impl := "_" + hardwareAccelImpl.name
+	impl := "_" + hardwareAccelImpl
 
 	for _, sz := range benchSizes {
 		bn := "ChaCha20" + impl + "_"

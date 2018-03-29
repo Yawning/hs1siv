@@ -63,15 +63,25 @@ func supportsAVX2BMI2() bool {
 	return regs[1]&avx2Bit != 0 && regs[1]&bmi2Bit != 0
 }
 
-var implAVX2BMI2 = &hwaccelImpl{
-	name:                 "AVX2",
-	chachaXORKeyStreamFn: chachaXORKeyStreamAVX2,
-	hashStepFn:           hashStepAVX2,
+func hashStep(ctx *hs1Ctx, in []byte, accum *[hs1HashRounds]uint64) {
+	if isHardwareAccelerated {
+		hashStepAVX2(ctx, in, accum)
+		return
+	}
+	hashStepRef(ctx, in, accum)
+}
+
+func chachaXORKeyStream(s *chachaState, in, out []byte) {
+	if isHardwareAccelerated {
+		chachaXORKeyStreamAVX2(s, in, out)
+		return
+	}
+	chachaXORKeyStreamRef(s, in, out)
 }
 
 func initHardwareAcceleration() {
 	if supportsAVX2BMI2() {
-		hardwareAccelImpl = implAVX2BMI2
+		hardwareAccelImpl = "AVX2"
 		isHardwareAccelerated = true
 	}
 }

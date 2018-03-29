@@ -7,22 +7,12 @@
 
 package hs1siv
 
+const implReference = "Reference"
+
 var (
 	isHardwareAccelerated = false
 	hardwareAccelImpl     = implReference
-
-	implReference = &hwaccelImpl{
-		name:                 "Reference",
-		chachaXORKeyStreamFn: chachaXORKeyStreamRef,
-		hashStepFn:           hashStepRef,
-	}
 )
-
-type hwaccelImpl struct {
-	name                 string
-	chachaXORKeyStreamFn func(*chachaState, []byte, []byte)
-	hashStepFn           func(*hs1Ctx, []byte, *[hs1HashRounds]uint64)
-}
 
 func forceDisableHardwareAcceleration() {
 	isHardwareAccelerated = false

@@ -12,3 +12,11 @@ package hs1siv
 func initHardwareAcceleration() {
 	forceDisableHardwareAcceleration()
 }
+
+func hashStep(ctx *hs1Ctx, in []byte, accum *[hs1HashRounds]uint64) {
+	hashStepRef(ctx, in, accum)
+}
+
+func chachaXORKeyStream(s *chachaState, in, out []byte) {
+	chachaXORKeyStreamRef(s, in, out)
+}

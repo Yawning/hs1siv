@@ -204,11 +204,11 @@ func (ctx *aeadCtx) sivHashAD(a []byte) {
 
 	// Hash associated data.
 	nhMultiple := aBytes & ^(hs1NHLen - 1)
-	hardwareAccelImpl.hashStepFn(&ctx.hashCtx, a[:nhMultiple], &ctx.sivAccum)
+	hashStep(&ctx.hashCtx, a[:nhMultiple], &ctx.sivAccum)
 	if nhMultiple < aBytes {
 		var buf [hs1NHLen]byte
 		copy(buf[:], a[nhMultiple:])
-		hardwareAccelImpl.hashStepFn(&ctx.hashCtx, buf[:], &ctx.sivAccum)
+		hashStep(&ctx.hashCtx, buf[:], &ctx.sivAccum)
 	}
 }
 
@@ -218,13 +218,13 @@ func (ctx *aeadCtx) sivGenerate(m, n, siv []byte) {
 	// Hash message data.
 	var chachaKey [chachaKeySize]byte
 	nhMultiple := mBytes & ^(hs1NHLen - 1)
-	hardwareAccelImpl.hashStepFn(&ctx.hashCtx, m[:nhMultiple], &ctx.sivAccum)
+	hashStep(&ctx.hashCtx, m[:nhMultiple], &ctx.sivAccum)
 	mBytes = mBytes - nhMultiple
 	mBytesWithPadding := (mBytes + 15) & ^15
 	if mBytesWithPadding == hs1NHLen {
 		var buf [hs1NHLen]byte
 		copy(buf[:], m[nhMultiple:])
-		hardwareAccelImpl.hashStepFn(&ctx.hashCtx, buf[:], &ctx.sivAccum)
+		hashStep(&ctx.hashCtx, buf[:], &ctx.sivAccum)
 		hashFinalizeRef(&ctx.hashCtx, ctx.sivLenBuf[:], &ctx.sivAccum, chachaKey[:])
 	} else {
 		var buf [hs1NHLen]byte

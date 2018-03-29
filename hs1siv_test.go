@@ -27,7 +27,7 @@ func mustInitHardwareAcceleration() {
 
 func TestKAT(t *testing.T) {
 	forceDisableHardwareAcceleration()
-	impl := "_" + hardwareAccelImpl.name
+	impl := "_" + hardwareAccelImpl
 	t.Run("HS1-SIV_KAT"+impl, func(t *testing.T) { doTestKAT(t) })
 
 	if !canAccelerate {
@@ -35,7 +35,7 @@ func TestKAT(t *testing.T) {
 		return
 	}
 	mustInitHardwareAcceleration()
-	impl = "_" + hardwareAccelImpl.name
+	impl = "_" + hardwareAccelImpl
 	t.Run("HS1-SIV_KAT"+impl, func(t *testing.T) { doTestKAT(t) })
 }
 
@@ -117,7 +117,7 @@ func BenchmarkHS1SIV(b *testing.B) {
 
 func doBenchmarkHS1SIV(b *testing.B) {
 	benchSizes := []int{8, 32, 64, 576, 1536, 4096, 1024768}
-	impl := "_" + hardwareAccelImpl.name
+	impl := "_" + hardwareAccelImpl
 
 	for _, sz := range benchSizes {
 		bn := "HS1-SIV" + impl + "_"
