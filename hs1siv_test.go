@@ -16,30 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var canAccelerate bool
-
-func mustInitHardwareAcceleration() {
-	initHardwareAcceleration()
-	if !IsHardwareAccelerated() {
-		panic("initHardwareAcceleration() failed")
-	}
-}
-
 func TestKAT(t *testing.T) {
-	forceDisableHardwareAcceleration()
-	impl := "_" + hardwareAccelImpl
-	t.Run("HS1-SIV_KAT"+impl, func(t *testing.T) { doTestKAT(t) })
-
-	if !canAccelerate {
-		t.Log("Hardware acceleration not supported on this host.")
-		return
-	}
-	mustInitHardwareAcceleration()
-	impl = "_" + hardwareAccelImpl
-	t.Run("HS1-SIV_KAT"+impl, func(t *testing.T) { doTestKAT(t) })
-}
-
-func doTestKAT(t *testing.T) {
 	require := require.New(t)
 
 	// There are no official test vectors, so the "known good" values used
@@ -104,23 +81,10 @@ func doTestKAT(t *testing.T) {
 }
 
 func BenchmarkHS1SIV(b *testing.B) {
-	forceDisableHardwareAcceleration()
-	doBenchmarkHS1SIV(b)
-
-	if !canAccelerate {
-		b.Log("Hardware acceleration not supported on this host.")
-		return
-	}
-	mustInitHardwareAcceleration()
-	doBenchmarkHS1SIV(b)
-}
-
-func doBenchmarkHS1SIV(b *testing.B) {
 	benchSizes := []int{8, 32, 64, 576, 1536, 4096, 1024768}
-	impl := "_" + hardwareAccelImpl
 
 	for _, sz := range benchSizes {
-		bn := "HS1-SIV" + impl + "_"
+		bn := "HS1-SIV"
 		sn := fmt.Sprintf("_%d", sz)
 		b.Run(bn+"Encrypt"+sn, func(b *testing.B) { doBenchmarkAEADEncrypt(b, sz) })
 		b.Run(bn+"Decrypt"+sn, func(b *testing.B) { doBenchmarkAEADDecrypt(b, sz) })
@@ -176,8 +140,4 @@ func doBenchmarkAEADDecrypt(b *testing.B, sz int) {
 	if !bytes.Equal(m, d) {
 		b.Fatalf("Open output mismatch")
 	}
-}
-
-func init() {
-	canAccelerate = IsHardwareAccelerated()
 }

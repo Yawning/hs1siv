@@ -30,7 +30,7 @@ const (
 	// TagSize is the size of an authentication tag in bytes.
 	TagSize = 32
 
-	stateSize = chachaKeySize + hashStateSize
+	stateSize = chacha20KeySize + hashStateSize
 )
 
 var (
@@ -46,8 +46,8 @@ var (
 	// during an Open call.
 	ErrOpen = errors.New("hs1siv: message authentication failed")
 
-	settings = [chachaNonceSize]byte{
-		0, 0, hs1SIVLen, 0, chachaRounds, hs1HashRounds, hs1NHLen,
+	settings = [chacha20NonceSize]byte{
+		0, 0, hs1SIVLen, 0, chacha20Rounds, hs1HashRounds, hs1NHLen,
 		0, 0, 0, 0,
 	}
 	zero [hs1SIVLen]byte
@@ -134,7 +134,7 @@ func New(key []byte) *AEAD {
 }
 
 type aeadCtx struct {
-	chachaKey [chachaKeySize]byte
+	chachaKey [chacha20KeySize]byte
 	hashCtx   hs1Ctx
 
 	sivAccum  [hs1HashRounds]uint64
@@ -156,13 +156,13 @@ func (ctx *aeadCtx) setup(userKey []byte) {
 	// implementation hard codes a 128 bit key.
 	//
 	// This implementation only supports a 256 bit key.
-	var chachaNonce [chachaNonceSize]byte
+	var chachaNonce [chacha20NonceSize]byte
 	copy(chachaNonce[:], settings[:])
 	chachaNonce[0] = byte(len(userKey))
 	var buf [stateSize]byte
 	chacha20(userKey, chachaNonce[:], buf[:], buf[:], 0)
 
-	off := chachaKeySize
+	off := chacha20KeySize
 	copy(ctx.chachaKey[:], buf[:off])
 	for i := range ctx.hashCtx.nhKey {
 		ctx.hashCtx.nhKey[i] = binary.LittleEndian.Uint32(buf[off:])
@@ -204,7 +204,7 @@ func (ctx *aeadCtx) sivGenerate(m, n, siv []byte) {
 	mBytes := len(m)
 
 	// Hash message data.
-	var chachaKey [chachaKeySize]byte
+	var chachaKey [chacha20KeySize]byte
 	nhMultiple := mBytes & ^(hs1NHLen - 1)
 	hashStep(&ctx.hashCtx, m[:nhMultiple], &ctx.sivAccum)
 	mBytes = mBytes - nhMultiple
@@ -213,12 +213,12 @@ func (ctx *aeadCtx) sivGenerate(m, n, siv []byte) {
 		var buf [hs1NHLen]byte
 		copy(buf[:], m[nhMultiple:])
 		hashStep(&ctx.hashCtx, buf[:], &ctx.sivAccum)
-		hashFinalizeRef(&ctx.hashCtx, ctx.sivLenBuf[:], &ctx.sivAccum, chachaKey[:])
+		hashFinalize(&ctx.hashCtx, ctx.sivLenBuf[:], &ctx.sivAccum, chachaKey[:])
 	} else {
 		var buf [hs1NHLen]byte
 		copy(buf[:], m[nhMultiple:])
 		copy(buf[mBytesWithPadding:], ctx.sivLenBuf[:])
-		hashFinalizeRef(&ctx.hashCtx, buf[:mBytesWithPadding+16], &ctx.sivAccum, chachaKey[:])
+		hashFinalize(&ctx.hashCtx, buf[:mBytesWithPadding+16], &ctx.sivAccum, chachaKey[:])
 	}
 
 	// Derive the SIV.
@@ -238,8 +238,8 @@ func (ctx *aeadCtx) encrypt(m, a, n, c []byte) {
 	ctx.sivHashAD(a)
 	ctx.sivGenerate(m, n, siv[:])
 
-	var chachaKey [chachaKeySize]byte
-	hashFinalizeRef(&ctx.hashCtx, siv[:], &accum, chachaKey[:])
+	var chachaKey [chacha20KeySize]byte
+	hashFinalize(&ctx.hashCtx, siv[:], &accum, chachaKey[:])
 	xorCopyChaChaKey(chachaKey[:], ctx.chachaKey[:])
 	chacha20(chachaKey[:], n, m, c, 1)
 	copy(c[mBytes:], siv[:])
@@ -262,8 +262,8 @@ func (ctx *aeadCtx) decrypt(c, a, n, m []byte) bool {
 	copy(siv[:], c[mBytes:])
 	copy(nonce[:], n) // Work with a copy, `m` and `n` may alias.
 
-	var chachaKey [chachaKeySize]byte
-	hashFinalizeRef(&ctx.hashCtx, siv[:], &accum, chachaKey[:])
+	var chachaKey [chacha20KeySize]byte
+	hashFinalize(&ctx.hashCtx, siv[:], &accum, chachaKey[:])
 	xorCopyChaChaKey(chachaKey[:], ctx.chachaKey[:])
 	ctx.sivSetup(len(a), len(m))
 	ctx.sivHashAD(a) // Hash AD before decrption, `m` and `a` may alias.

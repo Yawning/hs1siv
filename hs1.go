@@ -50,7 +50,7 @@ func asuHash(x uint64, k []uint64) uint32 {
 	return uint32(t >> 32)
 }
 
-func hashStepRef(ctx *hs1Ctx, in []byte, accum *[hs1HashRounds]uint64) {
+func hashStep(ctx *hs1Ctx, in []byte, accum *[hs1HashRounds]uint64) {
 	// len(in) MUST be a multiple of hs1NHLen.
 	inBytes := len(in)
 	for inBytes > 0 {
@@ -81,7 +81,7 @@ func hashStepRef(ctx *hs1Ctx, in []byte, accum *[hs1HashRounds]uint64) {
 	}
 }
 
-func hashFinalizeRef(ctx *hs1Ctx, in []byte, accum *[hs1HashRounds]uint64, result []byte) {
+func hashFinalize(ctx *hs1Ctx, in []byte, accum *[hs1HashRounds]uint64, result []byte) {
 	inBytes := len(in)
 	if inBytes > 0 {
 		var nhRes [hs1HashRounds]uint64
