@@ -7,7 +7,10 @@
 
 package hs1siv
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"math/bits"
+)
 
 const (
 	hs1NHLen      = 64 // Parameter b
@@ -26,15 +29,10 @@ type hs1Ctx struct {
 	asuKey  [hs1HashRounds * 3]uint64
 }
 
-// Return 63 bits congruent to ak+b mod (2^61-1).  Assume 60-bit k,b 63-bit a.
+// Return 63 bits congruent to ak+b mod (2^61-1).  Assume 60-bit k,b 62-bit a.
 func polyStep(a, b, k uint64) uint64 {
-	// No uint128_t or equivalent.  Could use inline assembly here, but Go
-	// can't/won't inline it, and the function call overhead will eclipse any
-	// performance gain.
-	m := uint64(uint32(a>>32))*uint64(uint32(k)) + uint64(uint32(k>>32))*uint64(uint32(a))
-	h := uint64(uint32(a>>32)) * uint64(uint32(k>>32))
-	l := uint64(uint32(a)) * uint64(uint32(k))
-	return (l & m61) + (h << 3) + (l >> 61) + b + (m >> 29) + ((m << 32) & m61)
+	hi, lo := bits.Mul64(a, k)
+	return (lo & m61) + ((lo >> 61) | (hi << 3)) + b
 }
 
 // Reduce a mod (2^61-1) in constant time.
