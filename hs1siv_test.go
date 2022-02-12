@@ -133,9 +133,9 @@ func doBenchmarkAEADEncrypt(b *testing.B, sz int) {
 
 	nonce, key := make([]byte, NonceSize), make([]byte, KeySize)
 	m, c := make([]byte, sz), make([]byte, 0, sz+TagSize)
-	rand.Read(nonce)
-	rand.Read(key)
-	rand.Read(m)
+	_, _ = rand.Read(nonce)
+	_, _ = rand.Read(key)
+	_, _ = rand.Read(m)
 	aead := New(key)
 
 	b.StartTimer()
@@ -155,9 +155,9 @@ func doBenchmarkAEADDecrypt(b *testing.B, sz int) {
 
 	nonce, key := make([]byte, NonceSize), make([]byte, KeySize)
 	m, c, d := make([]byte, sz), make([]byte, 0, sz+TagSize), make([]byte, 0, sz)
-	rand.Read(nonce)
-	rand.Read(key)
-	rand.Read(m)
+	_, _ = rand.Read(nonce)
+	_, _ = rand.Read(key)
+	_, _ = rand.Read(m)
 	aead := New(key)
 
 	c = aead.Seal(c, nonce, m, nil)
