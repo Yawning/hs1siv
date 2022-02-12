@@ -26,12 +26,6 @@ type hs1Ctx struct {
 	asuKey  [hs1HashRounds * 3]uint64
 }
 
-func (ctx *hs1Ctx) reset() {
-	burnUint32s(ctx.nhKey[:])
-	burnUint64s(ctx.polyKey[:])
-	burnUint64s(ctx.asuKey[:])
-}
-
 // Return 63 bits congruent to ak+b mod (2^61-1).  Assume 60-bit k,b 63-bit a.
 func polyStep(a, b, k uint64) uint64 {
 	// No uint128_t or equivalent.  Could use inline assembly here, but Go

@@ -86,7 +86,6 @@ func (ae *AEAD) Seal(dst, nonce, plaintext, additionalData []byte) []byte {
 	ctx.setup(ae.key)
 	ret, out := sliceForAppend(dst, len(plaintext)+TagSize)
 	ctx.encrypt(plaintext, additionalData, nonce, out)
-	ctx.reset()
 	return ret
 }
 
@@ -113,21 +112,17 @@ func (ae *AEAD) Open(dst, nonce, ciphertext, additionalData []byte) ([]byte, err
 	ctx.setup(ae.key)
 	ret, out := sliceForAppend(dst, len(ciphertext)-TagSize)
 	ok = ctx.decrypt(ciphertext, additionalData, nonce, out)
-	ctx.reset()
 	if !ok {
 		// On decryption failures, purge the invalid plaintext.
 		if len(out) > 0 {
-			burnBytes(out)
+			for i := range out {
+				out[i] = 0
+			}
 			ret = nil
 		}
 		err = ErrOpen
 	}
 	return ret, err
-}
-
-// Reset securely purges stored sensitive data from the AEAD instance.
-func (ae *AEAD) Reset() {
-	burnBytes(ae.key)
 }
 
 // New returns a new keyed HS1-SIV instance.
@@ -144,11 +139,6 @@ type aeadCtx struct {
 
 	sivAccum  [hs1HashRounds]uint64
 	sivLenBuf [16]byte
-}
-
-func (ctx *aeadCtx) reset() {
-	burnBytes(ctx.chachaKey[:])
-	ctx.hashCtx.reset()
 }
 
 // XOR first n bytes of src into dst, then copy the next 32-n bytes.
@@ -186,8 +176,6 @@ func (ctx *aeadCtx) setup(userKey []byte) {
 		ctx.hashCtx.asuKey[i] = binary.LittleEndian.Uint64(buf[off:])
 		off += 8
 	}
-
-	burnBytes(buf[:])
 }
 
 func (ctx *aeadCtx) sivSetup(aBytes, mBytes int) {
@@ -236,8 +224,6 @@ func (ctx *aeadCtx) sivGenerate(m, n, siv []byte) {
 	// Derive the SIV.
 	xorCopyChaChaKey(chachaKey[:], ctx.chachaKey[:])
 	chacha20(chachaKey[:], n, zero[:], siv, 0)
-
-	burnBytes(chachaKey[:])
 }
 
 func (ctx *aeadCtx) encrypt(m, a, n, c []byte) {
@@ -257,8 +243,6 @@ func (ctx *aeadCtx) encrypt(m, a, n, c []byte) {
 	xorCopyChaChaKey(chachaKey[:], ctx.chachaKey[:])
 	chacha20(chachaKey[:], n, m, c, 1)
 	copy(c[mBytes:], siv[:])
-
-	burnBytes(chachaKey[:])
 }
 
 func (ctx *aeadCtx) decrypt(c, a, n, m []byte) bool {

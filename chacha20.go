@@ -60,9 +60,6 @@ func chacha20(key, nonce, in, out []byte, initialCounter uint32) {
 	}
 
 	chachaXORKeyStream(s, in, out)
-
-	// Purge the state off the stack.
-	burnUint32s(s[:])
 }
 
 func chachaXORKeyStreamRef(s *chachaState, in, out []byte) {
